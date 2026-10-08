@@ -13,13 +13,15 @@ monopolises the link.
                   |  OS-Ken controller c0  |   reads events.jsonl, installs flows,
                   |  (127.0.0.1:6653)      |   logs bandwidth to stats.csv
                   +-----------+------------+
+                              |
                               | OpenFlow 1.3
                         +-----+-----+
                         |    s1     |   Open vSwitch
                         +-+--+--+-+-+
-        port 1 |  port 2 | port 3|  | port 4 (capped, default 10 Mbit/s)
-              h1        h2      h3  server 10.0.0.4 : TCP 5000
-          10.0.0.1  10.0.0.2  10.0.0.3
+        port 1 |  port 2 | port 3|  | port 4 	(capped, default 10 Mbit/s)
+              h1        h2      h3  
+              						
+          10.0.0.1  10.0.0.2  10.0.0.3 server 10.0.0.4 : TCP 5000
 ```
 
 All four hosts connect only to `s1` (star topology).
@@ -37,19 +39,19 @@ filesystem with the controller process, so the controller simply tails that file
 
 ## Files
 
-| File | Purpose |
-|---|---|
-| `server.py` | Threaded TCP file server: authentication, LIST, UPLOAD, DOWNLOAD, metadata, event log |
-| `fsclient.py` | Client library implementing the protocol |
-| `client.py` | Interactive command-line client |
-| `controller.py` | OS-Ken controller: learning switch, dynamic blocking, bandwidth monitor, hog limiter |
-| `policy.py` | Pure-Python policies: `BlockPolicy` (3 failures / 60 s) and `HogPolicy` |
-| `topology.py` | Mininet topology; `--mode sdn` or `--mode baseline`, link cap options |
-| `bench.py`, `analyze.py` | Benchmark client and results summariser |
-| `exp_sdn.mn`, `exp_baseline.mn` | Access-control / throughput experiments (run from the Mininet CLI) |
-| `exp_hog_nolimit.mn`, `exp_hog_limit.mn` | Hog-limiter experiment, limiter off / on |
-| `selftest.py` | Local loopback tests of the server (no Mininet needed) |
-| `results.csv`, `results_summary.md` | Raw and summarised experiment results |
+| File                                         | Purpose                                                                               |
+| -------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `server.py`                                | Threaded TCP file server: authentication, LIST, UPLOAD, DOWNLOAD, metadata, event log |
+| `fsclient.py`                              | Client library implementing the protocol                                              |
+| `client.py`                                | Interactive command-line client                                                       |
+| `controller.py`                            | OS-Ken controller: learning switch, dynamic blocking, bandwidth monitor, hog limiter  |
+| `policy.py`                                | Pure-Python policies:`BlockPolicy` (3 failures / 60 s) and `HogPolicy`            |
+| `topology.py`                              | Mininet topology;`--mode sdn` or `--mode baseline`, link cap options              |
+| `bench.py`, `analyze.py`                 | Benchmark client and results summariser                                               |
+| `exp_sdn.mn`, `exp_baseline.mn`          | Access-control / throughput experiments (run from the Mininet CLI)                    |
+| `exp_hog_nolimit.mn`, `exp_hog_limit.mn` | Hog-limiter experiment, limiter off / on                                              |
+| `selftest.py`                              | Local loopback tests of the server (no Mininet needed)                                |
+| `results.csv`, `results_summary.md`      | Raw and summarised experiment results                                                 |
 
 ## Protocol
 
@@ -138,20 +140,20 @@ Finally `python3 analyze.py`. Delete `results.csv` first to start fresh.
 
 ## Results (server link capped at 10 Mbit/s, 5 MB file)
 
-| Scenario | Metric | Baseline (no SDN) | SDN |
-|---|---|---|---|
-| single client, 10 runs | throughput (Mbit/s) | 9.16 ± 1.19 | 9.64 ± 0.03 |
-| 3 clients at once, 3 runs each | per-client throughput (Mbit/s) | 3.45 ± 1.04 | 3.68 ± 1.98 |
-| 3 clients at once | Jain fairness index | 0.999 | 0.943 |
-| brute-force login, 20 s | attempts that reached the server | 99 of 99 | 3 of 20 |
-| h2 download during the attack | throughput (Mbit/s) | 9.58 ± 0.10 | 9.61 ± 0.06 |
+| Scenario                       | Metric                           | Baseline (no SDN) | SDN          |
+| ------------------------------ | -------------------------------- | ----------------- | ------------ |
+| single client, 10 runs         | throughput (Mbit/s)              | 9.16 ± 1.19      | 9.64 ± 0.03 |
+| 3 clients at once, 3 runs each | per-client throughput (Mbit/s)   | 3.45 ± 1.04      | 3.68 ± 1.98 |
+| 3 clients at once              | Jain fairness index              | 0.999             | 0.943        |
+| brute-force login, 20 s        | attempts that reached the server | 99 of 99          | 3 of 20      |
+| h2 download during the attack  | throughput (Mbit/s)              | 9.58 ± 0.10      | 9.61 ± 0.06 |
 
 Hog scenario (h1 opens 4 downloads, h2 opens 1; controller present in both columns):
 
-| Metric (h2, the single-connection host) | Limiter off | Limiter on |
-|---|---|---|
-| throughput (Mbit/s) | 1.72 ± 0.40 (n=7) | 3.47 ± 1.84 (n=6) |
-| time to download 5 MB (s) | 25.7 ± 7.1 | 14.2 ± 4.8 |
+| Metric (h2, the single-connection host) | Limiter off        | Limiter on         |
+| --------------------------------------- | ------------------ | ------------------ |
+| throughput (Mbit/s)                     | 1.72 ± 0.40 (n=7) | 3.47 ± 1.84 (n=6) |
+| time to download 5 MB (s)               | 25.7 ± 7.1        | 14.2 ± 4.8        |
 
 * The controller blocked the attacker **89 ms** after the third failed login was logged (50 ms in a
   second run), and restored access after about 32 s (30 s timeout plus switch expiry check).
