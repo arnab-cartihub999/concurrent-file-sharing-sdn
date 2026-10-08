@@ -1,11 +1,11 @@
 """Concurrent TCP file-sharing server (line-based protocol).
 
-Protocol (every control message is one UTF-8 line ending in \\n):
+Protocol (every control message is one UTF-8 line ending in \n):
   C: AUTH <user> <password>        S: OK | ERR <reason>
-  C: LIST                          S: OK <nbytes>\\n then <nbytes> of text
+  C: LIST                          S: OK <nbytes>\n then <nbytes> of text
   C: UPLOAD <name> <size>          S: READY | ERR <reason>
      C: <size> raw bytes           S: OK | ERR <reason>
-  C: DOWNLOAD <name>               S: OK <size>\\n then <size> raw bytes | ERR <reason>
+  C: DOWNLOAD <name>               S: OK <size>\n then <size> raw bytes | ERR <reason>
   C: QUIT                          S: BYE
 
 Application events are appended (one JSON object per line) to events.jsonl so
@@ -22,6 +22,21 @@ import socket
 import threading
 import time
 from datetime import datetime
+
+_ws_broadcast = None
+
+
+def set_ws_broadcast(func):
+    global _ws_broadcast
+    _ws_broadcast = func
+
+
+def _emit(event_type: str, data: dict):
+    if _ws_broadcast:
+        try:
+            _ws_broadcast({"type": event_type, "data": data})
+        except Exception:
+            pass
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SHARED_DIR = os.path.join(BASE_DIR, "shared_files")
@@ -146,9 +161,11 @@ def handle_client(sock, addr):
                 user = parts[1]
                 c.send_line("OK")
                 log_event("AUTH_OK", ip=ip, user=user)
+                _emit("auth", {"ip": ip, "user": user, "success": True})
             else:
                 attempts += 1
                 log_event("AUTH_FAIL", ip=ip, attempt=attempts)
+                _emit("auth", {"ip": ip, "attempt": attempts, "success": False})
                 c.send_line("ERR authentication failed")
                 if attempts >= MAX_LOGIN_ATTEMPTS:
                     return
@@ -202,9 +219,11 @@ def handle_client(sock, addr):
                     if os.path.exists(part):
                         os.remove(part)  # never keep a partial upload
                     log_event("UPLOAD_FAILED", ip=ip, user=user, name=name)
+                    _emit("upload", {"ip": ip, "user": user, "name": name, "success": False})
                     raise
                 update_metadata(name, size, user)
                 log_event("UPLOAD", ip=ip, user=user, name=name, bytes=size)
+                _emit("upload", {"ip": ip, "user": user, "name": name, "bytes": size, "success": True})
                 c.send_line("OK")
 
             elif cmd == "DOWNLOAD":
@@ -212,6 +231,7 @@ def handle_client(sock, addr):
                 path = os.path.join(SHARED_DIR, name)
                 if not safe_name(name) or not os.path.isfile(path):
                     c.send_line("ERR file not found")
+                    _emit("download", {"ip": ip, "user": user, "name": name, "success": False})
                     continue
                 size = os.path.getsize(path)
                 c.send_line(f"OK {size}")
@@ -222,6 +242,7 @@ def handle_client(sock, addr):
                             break
                         sock.sendall(chunk)
                 log_event("DOWNLOAD", ip=ip, user=user, name=name, bytes=size)
+                _emit("download", {"ip": ip, "user": user, "name": name, "bytes": size, "success": True})
 
             elif cmd == "QUIT":
                 c.send_line("BYE")

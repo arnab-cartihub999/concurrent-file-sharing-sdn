@@ -1,14 +1,14 @@
 """OS-Ken controller: learning switch + dynamic blocking + bandwidth monitor.
 
 Dynamic blocking : the file server appends application events to events.jsonl.
-                   After 3 failed logins from one IP the controller installs a
-                   high-priority DROP flow for that IP -> server:5000 with a hard
-                   timeout, so access is restored automatically.
+                    After 3 failed logins from one IP the controller installs a
+                    high-priority DROP flow for that IP -> server:5000 with a hard
+                    timeout, so access is restored automatically.
 Static policy    : STATIC_H1_BLOCK=1 installs a permanent h1 -> server:5000 drop
-                   (used as the "static ACL" baseline).
+                    (used as the "static ACL" baseline).
 Monitoring       : port statistics every 2 s -> stats.csv (per-port Mbit/s).
 Hog limiter     : HOG_LIMIT=1 -> a host taking >60% of a busy link while another host is
-                   active gets an OpenFlow meter (default 40% of the link) for 20 s.
+                    active gets an OpenFlow meter (default 40% of the link) for 20 s.
 Logs             : controller_events.log
 """
 import os
@@ -23,6 +23,21 @@ from os_ken.ofproto import ofproto_v1_3
 from os_ken.lib.packet import packet, ethernet
 
 from policy import BlockPolicy, HogPolicy
+
+_ws_broadcast = None
+
+
+def set_ws_broadcast(func):
+    global _ws_broadcast
+    _ws_broadcast = func
+
+
+def _emit(event_type: str, data: dict):
+    if _ws_broadcast:
+        try:
+            _ws_broadcast({"type": event_type, "data": data})
+        except Exception:
+            pass
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 EVENTS_FILE = os.path.join(BASE_DIR, "events.jsonl")
@@ -95,6 +110,7 @@ class FileShareController(app_manager.OSKenApp):
             # installed proactively, so it works regardless of earlier traffic
             self.add_flow(dp, STATIC_PRIORITY, self.block_match(parser, "10.0.0.1"), [])
             self.log("STATIC_BLOCK 10.0.0.1 -> %s:%d installed" % (SERVER_IP, SERVICE_PORT))
+            _emit("static_block", {"ip": "10.0.0.1", "priority": STATIC_PRIORITY})
 
     @set_ev_cls(ofp_event.EventOFPStateChange, [MAIN_DISPATCHER, DEAD_DISPATCHER])
     def state_change(self, ev):
@@ -108,12 +124,15 @@ class FileShareController(app_manager.OSKenApp):
     def flow_removed(self, ev):
         m = ev.msg
         if m.priority == LIMIT_PRIORITY:
-            self.log("HOG_UNLIMIT ip=%s (rate limit expired)" % m.match.get("ipv4_dst"))
+            ip = m.match.get("ipv4_dst")
+            self.log("HOG_UNLIMIT ip=%s (rate limit expired)" % ip)
+            _emit("hog_unlimit", {"ip": ip})
             return
         if m.priority == BLOCK_PRIORITY:
             ip = m.match.get("ipv4_src")
             self.policy.blocked.pop(ip, None)
             self.log("UNBLOCK ip=%s (block expired, access restored)" % ip)
+            _emit("unblock", {"ip": ip})
 
     @set_ev_cls(ofp_event.EventOFPErrorMsg, MAIN_DISPATCHER)
     def error_handler(self, ev):
@@ -139,6 +158,7 @@ class FileShareController(app_manager.OSKenApp):
                                       instructions=inst, hard_timeout=self.hog.limit_seconds,
                                       flags=ofp.OFPFF_SEND_FLOW_REM))
         self.log("HOG_LIMIT ip=%s limit=%dkbps duration=%ds" % (ip, rate, self.hog.limit_seconds))
+        _emit("hog_limit", {"ip": ip, "limit_kbps": rate, "duration": self.hog.limit_seconds})
 
     # --------------------------------------------------------- learning sw
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
@@ -181,6 +201,7 @@ class FileShareController(app_manager.OSKenApp):
                 self.install_block(ip, BLOCK_SECONDS)
                 self.log("BLOCK ip=%s reason=3_failed_logins timeout=%ds response_ms=%.1f"
                          % (ip, BLOCK_SECONDS, (time.time() - ts) * 1000))
+                _emit("block", {"ip": ip, "reason": "3_failed_logins", "timeout": BLOCK_SECONDS})
 
     # ------------------------------------------------ bandwidth monitoring
     def _poll_stats(self):
