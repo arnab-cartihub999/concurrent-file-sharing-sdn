@@ -42,14 +42,69 @@ filesystem with the controller process, so the controller simply tails that file
 | `server.py` | Threaded TCP file server: authentication, LIST, UPLOAD, DOWNLOAD, metadata, event log |
 | `fsclient.py` | Client library implementing the protocol |
 | `client.py` | Interactive command-line client |
+| `webapp.py` | CampusShare portal: roles, assignments, materials, grading, browser UI, live SDN panel |
 | `controller.py` | OS-Ken controller: learning switch, dynamic blocking, bandwidth monitor, hog limiter |
 | `policy.py` | Pure-Python policies: `BlockPolicy` (3 failures / 60 s) and `HogPolicy` |
-| `topology.py` | Mininet topology; `--mode sdn` or `--mode baseline`, link cap options |
+| `topology.py` | Mininet topology; `--mode sdn` or `--mode baseline`, link cap options, `--web` gateway |
 | `bench.py`, `analyze.py` | Benchmark client and results summariser |
 | `exp_sdn.mn`, `exp_baseline.mn` | Access-control / throughput experiments (run from the Mininet CLI) |
 | `exp_hog_nolimit.mn`, `exp_hog_limit.mn` | Hog-limiter experiment, limiter off / on |
 | `selftest.py` | Local loopback tests of the server (no Mininet needed) |
 | `results.csv`, `results_summary.md` | Raw and summarised experiment results |
+
+## CampusShare portal (the application)
+
+The file-sharing system is used inside a real-life application: **CampusShare**, a college
+assignment-submission and course-material portal. `webapp.py` is the application layer (a
+standard-library HTTP server plus a browser interface). The files themselves live on the TCP
+file server; every upload and download is an ordinary **TCP connection** made with `fsclient.py`,
+so it crosses the Open vSwitch and is subject to the controller's policies.
+
+```text
+ Browser --HTTP--> webapp.py (roles, courses, assignments, grades, portal.json)
+                      |  TCP :5000 (fsclient.py), via switch port 5 (10.0.0.254)
+                      v
+                    s1 (Open vSwitch) <--OpenFlow-- OS-Ken controller (block / limit / monitor)
+                      |
+                    file server 10.0.0.4 (server.py)
+```
+
+| Role | Demo account | Can do |
+|---|---|---|
+| Student | alice / alice123, bob / bob123, carol / carol123 | see assignments, submit and resubmit work, see own marks and feedback, download course materials |
+| Faculty | prof / prof123 | publish assignments with due dates, upload course materials, download every submission, grade with feedback |
+| Admin | admin / 1234 | everything faculty can do |
+
+How the application uses the file service:
+
+* Submissions are stored on the file server as `SUB_<assignment>_<student>_<file>`, course
+  materials as `MAT_<course>_<file>`. Late submissions (after the due date) are flagged.
+* **Access rules** (enforced by the portal on every download): a student can download only their own
+  submissions and course materials; faculty and admin can download any submission; files not created
+  by the portal are not reachable through it. A new submission clears an old grade.
+* Assignments, submission records and grades are kept in `portal.json` (written atomically under a lock).
+* The right-hand panel shows live switch-port traffic (`stats.csv`) and policy events
+  (`controller_events.log`) from the controller.
+
+Start the network with `--web`, which attaches this computer to the switch as `10.0.0.254` (port 5),
+so the portal's traffic really crosses the switch and the controller's policies:
+
+```bash
+# Terminal A: controller            HOG_LIMIT=1 osken-manager controller.py
+# Terminal B: network               sudo mn -c ; sudo python3 topology.py --web
+#   mininet>  server python3 server.py > server.log 2>&1 &
+# Terminal C: portal (normal user)  python3 webapp.py
+```
+
+Open <http://localhost:8080>. Three wrong passwords in the login form trigger the same dynamic
+block (the portal gateway, 10.0.0.254, is blocked for 30 s; the page explains it and the controller
+panel shows `BLOCK` and `UNBLOCK`). Without Mininet: run the file server locally with
+`--host 127.0.0.1` and start `python3 webapp.py --server-host 127.0.0.1`.
+
+Security notes: sessions are kept in server memory (cookie `HttpOnly`, `SameSite=Strict`); file names
+are sanitised to `[A-Za-z0-9._-]`; the portal listens on `127.0.0.1` only; traffic is plain HTTP, fine
+for a local demo only. The portal's access rules apply to the web interface; the raw file server
+itself still lets any authenticated user list and download any file through the command-line client.
 
 ## Protocol
 
@@ -68,7 +123,7 @@ to a temporary `.part` file that is removed if the transfer is interrupted; `met
 writes are locked and atomic.
 
 Demo accounts (hard-coded, passwords stored as salted PBKDF2 hashes in memory):
-`admin/1234`, `alice/alice123`, `bob/bob123`. Traffic is not encrypted (no TLS).
+`admin/1234`, `alice/alice123`, `bob/bob123`, `carol/carol123`, `prof/prof123`. Traffic is not encrypted (no TLS).
 
 ## Requirements
 
@@ -167,6 +222,9 @@ Hog scenario (h1 opens 4 downloads, h2 opens 1; controller present in both colum
 * All downloads were verified with SHA-256.
 
 ## Known limitations
+
+* The portal is one gateway: all browser users appear to the server and controller as one IP (10.0.0.254), so a block affects every browser user, and per-user network policy is not possible through it.
+* Roles and course enrolment are fixed in `webapp.py`; there is no sign-up or file deletion.
 
 * The controller and server communicate through a shared file, which works because Mininet hosts
   share the host filesystem; a real deployment would use a network channel.

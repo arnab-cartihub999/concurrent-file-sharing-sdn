@@ -44,7 +44,8 @@ def _hash(password, salt):
 
 def _make_users():
     users = {}
-    for name, pw in (("admin", "1234"), ("alice", "alice123"), ("bob", "bob123")):
+    for name, pw in (("admin", "1234"), ("alice", "alice123"), ("bob", "bob123"),
+                     ("carol", "carol123"), ("prof", "prof123")):
         salt = os.urandom(16)
         users[name] = (salt, _hash(pw, salt))
     return users
